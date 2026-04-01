@@ -12,6 +12,32 @@ const DEFAULT_SUB_UPDATE_TIME = 6; // 自定义订阅更新时间，单位小时
 const TOTAL_TB = 99; // TB
 const EXPIRE_TIMESTAMP = 4102329600000; // 2099-12-31
 
+const NGINX_PAGE = `<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+<style>
+	body {
+		width: 35em;
+		margin: 0 auto;
+		font-family: Tahoma, Verdana, Arial, sans-serif;
+	}
+</style>
+</head>
+<body>
+<h1>Welcome to nginx!</h1>
+<p>If you see this page, the nginx web server is successfully installed and
+working. Further configuration is required.</p>
+
+<p>For online documentation and support please refer to
+<a href="http://nginx.org/">nginx.org</a>.<br/>
+Commercial support is available at
+<a href="http://nginx.com/">nginx.com</a>.</p>
+
+<p><em>Thank you for using nginx.</em></p>
+</body>
+</html>`;
+
 const SECURITY_HEADERS = {
 	"X-Content-Type-Options": "nosniff",
 	"X-Frame-Options": "DENY",
@@ -25,6 +51,24 @@ https://cfxr.eu.org/getSub
 `;
 
 // ===== 工具函数 =====
+
+function isPrivateIP(hostname) {
+	// 检测 IPv4 私有/保留地址
+	const parts = hostname.split('.');
+	if (parts.length === 4) {
+		const [a, b] = parts.map(Number);
+		if (!isNaN(a) && !isNaN(b)) {
+			return (a === 10) ||
+				(a === 172 && b >= 16 && b <= 31) ||
+				(a === 192 && b === 168) ||
+				(a === 127) ||
+				(a === 0);
+		}
+	}
+	// 检测 IPv6 回环和内网
+	const lower = hostname.toLowerCase();
+	return lower === '::1' || lower === 'localhost' || lower.startsWith('fc') || lower.startsWith('fd') || lower === '[::1]';
+}
 
 function escapeHtml(str) {
 	if (!str) return '';
@@ -142,8 +186,7 @@ export default {
 
 		// --- Token 验证 ---
 		const isTokenValid = [mytoken, fakeToken, guestSubToken].includes(token) ||
-			url.pathname == ("/" + mytoken) ||
-			url.pathname.includes("/" + mytoken + "?");
+			url.pathname == ("/" + mytoken);
 
 		if (!isTokenValid) {
 			if (TG == 1 && url.pathname !== "/" && url.pathname !== "/favicon.ico") {
@@ -170,10 +213,10 @@ export default {
 			}
 		} else {
 			MainData = env.LINK || MainData;
-			if (env.LINKSUB) urls = await ADD(env.LINKSUB);
+			if (env.LINKSUB) urls = ADD(env.LINKSUB);
 		}
 
-		let allLinks = await ADD(MainData + '\n' + urls.join('\n'));
+		let allLinks = ADD(MainData + '\n' + urls.join('\n'));
 		let selfNodes = "";
 		let subLinks = "";
 		for (const x of allLinks) {
@@ -184,7 +227,7 @@ export default {
 			}
 		}
 		MainData = selfNodes;
-		urls = await ADD(subLinks);
+		urls = ADD(subLinks);
 
 		ctx.waitUntil(sendMessage(BotToken, ChatID, `#获取订阅 ${FileName}`, request.headers.get('CF-Connecting-IP'), `UA: ${userAgentHeader}</tg-spoiler>\n域名: ${url.hostname}\n<tg-spoiler>入口: ${url.pathname + url.search}</tg-spoiler>`));
 
@@ -212,8 +255,10 @@ export default {
 						headers: { 'User-Agent': 'v2rayN/CF-Workers-SUB  (https://github.com/cmliu/CF-Workers-SUB)' }
 					});
 					if (subConverterResponse.ok) {
-						const subConverterContent = await subConverterResponse.text();
-						req_data += '\n' + atob(subConverterContent);
+				const subConverterContent = await subConverterResponse.text();
+					if (isValidBase64(subConverterContent)) {
+						req_data += '\n' + base64Decode(subConverterContent);
+					}
 					}
 				} catch (error) {
 					console.log('订阅转换回base64失败，检查订阅转换后端是否正常运行');
@@ -221,11 +266,11 @@ export default {
 			}
 		}
 
-		if (env.WARP) 订阅转换URL += "|" + (await ADD(env.WARP)).join("|");
+		if (env.WARP) 订阅转换URL += "|" + ADD(env.WARP).join("|");
 
 		// 去重（移除了无用的 UTF-8 编解码步骤）
-		const uniqueLines = new Set(req_data.split('\n'));
-		const result = [...uniqueLines].join('\n');
+	const uniqueLines = new Set(req_data.split('\n').map(line => line.trim()).filter(Boolean));
+	const result = [...uniqueLines].join('\n');
 
 		// 统一 Base64 编码
 		const base64Data = encodeBase64(result);
@@ -271,7 +316,7 @@ export default {
 
 // ===== 辅助函数 =====
 
-async function ADD(envadd) {
+function ADD(envadd) {
 	let addtext = envadd.replace(/[	"'|\r\n]+/g, '\n').replace(/\n+/g, '\n');
 	if (addtext.charAt(0) == '\n') addtext = addtext.slice(1);
 	if (addtext.charAt(addtext.length - 1) == '\n') addtext = addtext.slice(0, addtext.length - 1);
@@ -279,40 +324,14 @@ async function ADD(envadd) {
 }
 
 async function nginx() {
-	const text = `
-	<!DOCTYPE html>
-	<html>
-	<head>
-	<title>Welcome to nginx!</title>
-	<style>
-		body {
-			width: 35em;
-			margin: 0 auto;
-			font-family: Tahoma, Verdana, Arial, sans-serif;
-		}
-	</style>
-	</head>
-	<body>
-	<h1>Welcome to nginx!</h1>
-	<p>If you see this page, the nginx web server is successfully installed and
-	working. Further configuration is required.</p>
-	
-	<p>For online documentation and support please refer to
-	<a href="http://nginx.org/">nginx.org</a>.<br/>
-	Commercial support is available at
-	<a href="http://nginx.com/">nginx.com</a>.</p>
-	
-	<p><em>Thank you for using nginx.</em></p>
-	</body>
-	</html>
-	`;
-	return text;
+	return NGINX_PAGE;
 }
 
 async function sendMessage(botToken, chatID, type, ip, add_data = "") {
 	if (botToken !== '' && chatID !== '') {
 		let msg = "";
 		try {
+			// 注意：ip-api.com 免费版仅支持 HTTP，生产环境建议使用支持 HTTPS 的 IP 查询服务
 			const response = await fetch(`http://ip-api.com/json/${ip}?lang=zh-CN`, {
 				signal: AbortSignal.timeout(3000) // 3秒超时，防止拖慢主请求
 			});
@@ -377,10 +396,18 @@ function clashFix(content) {
 }
 
 async function proxyURL(proxyURLStr, url) {
-	const URLs = await ADD(proxyURLStr);
+	const URLs = ADD(proxyURLStr);
 	const fullURL = URLs[Math.floor(Math.random() * URLs.length)];
 
 	const parsedURL = new URL(fullURL);
+	// SSRF 防护：禁止访问内网/保留地址
+	if (isPrivateIP(parsedURL.hostname)) {
+		return new Response("禁止访问内网地址", {
+			status: 403,
+			headers: withSecurityHeaders({ "Content-Type": "text/plain;charset=utf-8" })
+		});
+	}
+
 	console.log(parsedURL);
 	let URLProtocol = parsedURL.protocol.slice(0, -1) || 'https';
 	const URLHostname = parsedURL.hostname;
@@ -414,16 +441,16 @@ async function getSUB(api, request, 追加UA, userAgentHeader) {
 	let 订阅转换URLs = "";
 	let 异常订阅 = "";
 
-	// 创建 AbortController 并将 signal 传入 fetch
-	const controller = new AbortController();
-	const timeout = setTimeout(() => {
-		controller.abort();
-	}, SUB_FETCH_TIMEOUT);
-
 	try {
 		const responses = await Promise.allSettled(
-			api.map(apiUrl => getUrl(request, apiUrl, 追加UA, userAgentHeader, controller.signal)
-				.then(response => response.ok ? response.text() : Promise.reject(response)))
+			api.map(apiUrl => {
+				// 每个请求独立的超时控制
+				const controller = new AbortController();
+				const timeout = setTimeout(() => controller.abort(), SUB_FETCH_TIMEOUT);
+				return getUrl(request, apiUrl, 追加UA, userAgentHeader, controller.signal)
+					.then(response => response.ok ? response.text() : Promise.reject(response))
+					.finally(() => clearTimeout(timeout));
+			})
 		);
 
 		const modifiedResponses = responses.map((response, index) => {
@@ -460,11 +487,9 @@ async function getSUB(api, request, 追加UA, userAgentHeader) {
 		}
 	} catch (error) {
 		console.error(error);
-	} finally {
-		clearTimeout(timeout);
 	}
 
-	const 订阅内容 = await ADD(newapi + 异常订阅);
+	const 订阅内容 = ADD(newapi + 异常订阅);
 	return [订阅内容, 订阅转换URLs];
 }
 
@@ -505,9 +530,23 @@ async function 迁移地址列表(env, txt = 'ADD.txt') {
 async function KV(request, env, txt = 'ADD.txt', guest, mytoken, subProtocol, subConverter, subConfig, fileName, botToken, chatID) {
 	const url = new URL(request.url);
 	try {
-		// POST请求处理 - 添加大小限制
+		// POST请求处理 - 添加大小限制和认证
 		if (request.method === "POST") {
 			if (!env.KV) return new Response("未绑定KV空间", { status: 400, headers: withSecurityHeaders({ "Content-Type": "text/plain;charset=utf-8" }) });
+
+			// POST 请求也需要验证 token（支持查询参数和路径两种方式）
+			const postToken = url.searchParams.get('token');
+			const currentDate = new Date();
+			currentDate.setHours(0, 0, 0, 0);
+			const timeTemp = Math.ceil(currentDate.getTime() / 1000);
+			const expectedToken = env.TOKEN || DEFAULT_TOKEN;
+			const expectedFake = await MD5MD5(`${expectedToken}${timeTemp}`);
+			const expectedGuest = env.GUESTTOKEN || env.GUEST || await MD5MD5(expectedToken);
+			const isPostAuthed = [expectedToken, expectedFake, expectedGuest].includes(postToken) ||
+				url.pathname == ("/" + expectedToken);
+			if (!isPostAuthed) {
+				return new Response("未授权", { status: 403, headers: withSecurityHeaders({ "Content-Type": "text/plain;charset=utf-8" }) });
+			}
 
 			try {
 				const content = await request.text();
@@ -659,8 +698,15 @@ async function KV(request, env, txt = 'ADD.txt', guest, mytoken, subProtocol, su
 					<div class="editor-container">
 						${hasKV ? `
 						<textarea class="editor" 
-							placeholder="${decodeURIComponent(atob('TElOSyVFNyVBNCVCQSVFNCVCRSU4QiVFRiVCQyU4OCVFNCVCOCU4MCVFOCVBMSU4QyVFNCVCOCU4MCVFNCVCOCVBQSVFOCU4QSU4MiVFNyU4MiVCOSVFOSU5MyVCRSVFNiU4RSVBNSVFNSU4RCVCMyVFNSU4RiVBRiVFRiVCQyU4OSVFRiVCQyU5QQp2bGVzcyUzQSUyRiUyRjI0NmFhNzk1LTA2MzctNGY0Yy04ZjY0LTJjOGZiMjRjMWJhZCU0MDEyNy4wLjAuMSUzQTEyMzQlM0ZlbmNyeXB0aW9uJTNEbm9uZSUyNnNlY3VyaXR5JTNEdGxzJTI2c25pJTNEVEcuQ01MaXVzc3NzLmxvc2V5b3VyaXAuY29tJTI2YWxsb3dJbnNlY3VyZSUzRDElMjZ0eXBlJTNEd3MlMjZob3N0JTNEVEcuQ01MaXVzc3NzLmxvc2V5b3VyaXAuY29tJTI2cGF0aCUzRCUyNTJGJTI1M0ZlZCUyNTNEMjU2MCUyM0NGbmF0CnRyb2phbiUzQSUyRiUyRmFhNmRkZDJmLWQxY2YtNGE1Mi1iYTFiLTI2NDBjNDFhNzg1NiU0MDIxOC4xOTAuMjMwLjIwNyUzQTQxMjg4JTNGc2VjdXJpdHklM0R0bHMlMjZzbmklM0RoazEyLmJpbGliaWxpLmNvbSUyNmFsbG93SW5zZWN1cmUlM0QxJTI2dHlwZSUzRHRjcCUyNmhlYWRlclR5cGUlM0Rub25lJTIzSEsKc3MlM0ElMkYlMkZZMmhoWTJoaE1qQXRhV1YwWmkxd2IyeDVNVE13TlRveVJYUlFjVzQyU0ZscVZVNWpTRzlvVEdaVmNFWlJkMjVtYWtORFVUVnRhREZ0U21SRlRVTkNkV04xVjFvNVVERjFaR3RTUzBodVZuaDFielUxYXpGTFdIb3lSbTgyYW5KbmRERTRWelkyYjNCMGVURmxOR0p0TVdwNlprTm1RbUklMjUzRCU0MDg0LjE5LjMxLjYzJTNBNTA4NDElMjNERQoKCiVFOCVBRSVBMiVFOSU5OCU4NSVFOSU5MyVCRSVFNiU4RSVBNSVFNyVBNCVCQSVFNCVCRSU4QiVFRiVCQyU4OCVFNCVCOCU4MCVFOCVBMSU4QyVFNCVCOCU4MCVFNiU5RCVBMSVFOCVBRSVBMiVFOSU5OCU4NSVFOSU5MyVCRSVFNiU4RSVBNSVFNSU4RCVCMyVFNSU4RiVBRiVFRiVCQyU4OSVFRiVCQyU5QQpodHRwcyUzQSUyRiUyRnN1Yi54Zi5mcmVlLmhyJTJGYXV0bw=='))}"
-							id="content">${content}</textarea>
+							placeholder="LINK示例（一行一个节点链接即可）：
+vless://246aa795-0637-4f4c-8f64-2c8fb24c1bad@127.0.0.1:1234?encryption=none&amp;security=tls&amp;sni=TG.CMLiussss.loseyourip.com&amp;allowInsecure=1&amp;type=ws&amp;host=TG.CMLiussss.loseyourip.com&amp;path=%2F%3Fed%3D2560#CFnat
+trojan://aa6ddd2f-d1cf-4a52-ba1b-2640c41a7856@218.190.230.207:41288?security=tls&amp;sni=hk12.bilibili.com&amp;allowInsecure=1&amp;type=tcp&amp;headerType=none#HK
+ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNToyRXRQcW42SFlqVU5jSG9oTGZVcEZRd25makNDUTVtaDFtSmRFTUNCdWN1V1o5UDF1ZGtSS0huVnh1bzU1azFLWHoyRm82anJndDE4VzY2b3B0eTFlNGJtMWp6ZkNmQmI=@84.19.31.63:50841#DE
+
+
+订阅链接示例（一行一条订阅链接即可）：
+https://sub.xf.free.hr/auto"
+							id="content">${escapeHtml(content)}</textarea>
 						<div class="save-container">
 							<button class="save-btn" onclick="saveContent(this)">保存</button>
 							<span class="save-status" id="saveStatus"></span>
@@ -669,7 +715,13 @@ async function KV(request, env, txt = 'ADD.txt', guest, mytoken, subProtocol, su
 					</div>
 					<br>
 					################################################################<br>
-					${decodeURIComponent(atob('dGVsZWdyYW0lMjAlRTQlQkElQTQlRTYlQjUlODElRTclQkUlQTQlMjAlRTYlOEElODAlRTYlOUMlQUYlRTUlQTQlQTclRTQlQkQlQUMlN0UlRTUlOUMlQTglRTclQkElQkYlRTUlOEYlOTElRTclODklOEMhJTNDYnIlM0UKJTNDYSUyMGhyZWYlM0QlMjdodHRwcyUzQSUyRiUyRnQubWUlMkZDTUxpdXNzc3MlMjclM0VodHRwcyUzQSUyRiUyRnQubWUlMkZDTUxpdXNzc3MlM0MlMkZhJTNFJTNDYnIlM0UKLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tJTNDYnIlM0UKZ2l0aHViJTIwJUU5JUExJUI5JUU3JTlCJUFFJUU1JTlDJUIwJUU1JTlEJTgwJTIwU3RhciFTdGFyIVN0YXIhISElM0NiciUzRQolM0NhJTIwaHJlZiUzRCUyN2h0dHBzJTNBJTJGJTJGZ2l0aHViLmNvbSUyRmNtbGl1JTJGQ0YtV29ya2Vycy1TVUIlMjclM0VodHRwcyUzQSUyRiUyRmdpdGh1Yi5jb20lMkZjbWxpdSUyRkNGLVdvcmtlcnMtU1VCJTNDJTJGYSUzRSUzQ2JyJTNFCi0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLSUzQ2JyJTNFCiUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMyUyMw=='))}
+					telegram 交流群 技术大佬~在线发牌!<br>
+					<a href='https://t.me/CMLiussss'>https://t.me/CMLiussss</a><br>
+					----------------------------------------------------------------<br>
+					github 项目地址 Star!Star!Star!!!<br>
+					<a href='https://github.com/cmliu/CF-Workers-SUB'>https://github.com/cmliu/CF-Workers-SUB</a><br>
+					----------------------------------------------------------------<br>
+					################################################################
 					<br><br>UA: <strong>${escapeHtml(request.headers.get('User-Agent'))}</strong>
 					<script>
 					function copyToClipboard(text, qrcode) {
@@ -796,7 +848,6 @@ async function KV(request, env, txt = 'ADD.txt', guest, mytoken, subProtocol, su
 							}
 						}
 		
-						textarea.addEventListener('blur', saveContent);
 						textarea.addEventListener('input', () => {
 							clearTimeout(timer);
 							timer = setTimeout(saveContent, 5000);
